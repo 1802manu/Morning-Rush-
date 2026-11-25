@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Morning Rush: live queue simulation</title>
+<style>
+:root{--bg:#f3f6f5;--surface:#ffffff;--ink:#14282b;--muted:#5b6f72;--line:#d3dedd;--accent:#0f766e;--warn:#c2410c;--cust:#0f766e;--busy:#f5b301;--box-sizing:border-box;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1819;--surface:#152426;--ink:#e6f0ef;--muted:#92a9ab;--line:#2a3e40;--accent:#2dd4bf;--warn:#fb923c;--cust:#2dd4bf;--busy:#fbbf24;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e1819;--surface:#152426;--ink:#e6f0ef;--muted:#92a9ab;--line:#2a3e40;--accent:#2dd4bf;--warn:#fb923c;--cust:#2dd4bf;--busy:#fbbf24;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Trebuchet MS","Segoe UI",system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:20px 16px 40px}
+h1{font:700 1.9rem/1.15 Georgia,"Times New Roman",serif;margin:0 0 6px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 18px;max-width:62ch}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
+canvas{width:100%;display:block}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.stat b{display:block;font:700 1.6rem/1.1 Georgia,serif}
+.stat span{color:var(--muted);font-size:.85rem}
+.stat.bad b{color:var(--warn)}
+.ctrls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;align-items:end}
+label{display:block;font-size:.9rem;color:var(--muted)}
+label b{color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:8px 14px;border-radius:8px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+:root[data-theme="dark"] button.primary{color:#062a27}
+button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#log{font-size:.9rem;color:var(--muted);min-height:1.5em;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>Morning rush at the counter</h1>
+<p class="sub">Customers arrive at random. Each barista takes about 75 seconds per order. Staff the counter so people don’t wait long or walk out, then hit the rush button and see what holds up.</p>
+
+<div class="stats">
+<div class="stat"><b id="sQ">0</b><span>waiting now</span></div>
+<div class="stat"><b id="sW">0:00</b><span>average wait</span></div>
+<div class="stat"><b id="sS">0</b><span>served</span></div>
+<div class="stat bad"><b id="sL">0</b><span>walked out</span></div>
+<div class="stat"><b id="sU">0%</b><span>barista busy time</span></div>
+</div>
+
+<div class="panel"><canvas id="shop" width="800" height="230" aria-label="Customers queueing for baristas"></canvas></div>
+<div class="panel"><canvas id="chart" width="800" height="150" aria-label="Queue length over time"></canvas></div>
+
+<div class="panel">
+<div class="ctrls">
+<label>Baristas on shift: <b id="vB">3</b><input id="nB" type="range" min="1" max="8" value="3"></label>
+<label>Customers arriving per minute: <b id="vA">2.5</b><input id="nA" type="range" min="0.5" max="9" step="0.5" value="2.5"></label>
+<label>Simulation speed: <b id="vS">1×</b><input id="nS" type="range" min="1" max="5" value="1"></label>
+<div class="row">
+<button class="primary" id="rush">Start 2-minute rush</button>
+<button id="pause">Pause</button>
+<button id="reset">Reset</button>
+</div>
+</div>
+<div id="log">Running. One simulated minute passes every 6 seconds.</div>
+</div>
+</main>
+<script>
+(function(){
+var $=function(id){return document.getElementById(id)};
+var S,paused=false,last=performance.now(),rushLeft=0;
+function init(){S={t:0,q:[],srv:[],served:0,left:0,waitSum:0,hist:[],busy:0,bt:0,nextId:1};setServers()}
+function setServers(){var n=+$('nB').value;while(S.srv.length<n)S.srv.push({c:null,rem:0,tot:1});
+while(S.srv.length>n){var s=S.srv.pop();if(s.c)S.q.unshift(s.c)}}
+function expo(m){return -m*Math.log(1-Math.random())}
+function step(dt){
+var lam=(+$('nA').value)*(rushLeft>0?2:1)/60;
+if(rushLeft>0){rushLeft-=dt;if(rushLeft<=0){rushLeft=0;$('rush').disabled=false;$('log').textContent='Rush is over. Watch how fast the line drains.'}}
+if(Math.random()<1-Math.exp(-lam*dt))S.q.push({id:S.nextId++,at:S.t,pat:240+Math.random()*240});
+for(var i=S.q.length-1;i>=0;i--){var c=S.q[i];if(S.t-c.at>c.pat){S.q.splice(i,1);S.left++}}
+S.srv.forEach(function(s){
+if(s.c){s.rem-=dt;S.busy+=dt;if(s.rem<=0){S.served++;s.c=null}}
+if(!s.c&&S.q.length){var c=S.q.shift();s.c=c;s.tot=s.rem=Math.max(20,expo(75));S.waitSum+=S.t-c.at}
+});
+S.bt+=dt*S.srv.length;S.t+=dt;
+if(Math.floor(S.t/6)>S.hist.length)S.hist.push(S.q.length);
+if(S.hist.length>200)S.hist.shift();
+}
+function fmt(s){s=Math.round(s);return Math.floor(s/60)+':'+('0'+s%60).slice(-2)}
+function col(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function drawShop(){
+var cv=$('shop'),g=cv.getContext('2d'),w=cv.width,h=cv.height;g.clearRect(0,0,w,h);
+var cust=col('--cust'),busy=col('--busy'),line=col('--line'),ink=col('--ink'),muted=col('--muted'),warn=col('--warn');
+g.font='13px "Trebuchet MS",sans-serif';g.fillStyle=muted;g.fillText('Line (front of line on the right)',10,18);
+var perRow=26,gap=22;
+S.q.slice(0,104).forEach(function(c,i){var row=Math.floor(i/perRow),col2=i%perRow;
+var x=520-col2*gap+10,y=40+row*24;var w2=S.t-c.at,r=w2/c.pat;
+g.fillStyle=r>.66?warn:cust;g.beginPath();g.arc(x,y,7,0,6.283);g.fill()});
+if(S.q.length>104){g.fillStyle=ink;g.fillText('+'+(S.q.length-104)+' more',10,h-10)}
+var n=S.srv.length,sw=Math.min(46,(h-30)/n-6);
+S.srv.forEach(function(s,i){var x=600,y=14+i*((h-24)/n);
+g.strokeStyle=line;g.lineWidth=2;g.strokeRect(x,y,190,sw);
+if(s.c){g.fillStyle=busy;g.fillRect(x+2,y+2,(186)*(1-s.rem/s.tot),sw-4);g.fillStyle='#1b1b1b'}
+else{g.fillStyle=muted}
+g.fillText(s.c?'making order '+Math.max(0,Math.ceil(s.rem))+'s':'idle',x+10,y+sw/2+4)});
+}
+function drawChart(){
+var cv=$('chart'),g=cv.getContext('2d'),w=cv.width,h=cv.height;g.clearRect(0,0,w,h);
+var line=col('--line'),acc=col('--accent'),muted=col('--muted');
+var mx=Math.max(10,Math.max.apply(null,S.hist.concat([0])));
+g.strokeStyle=line;g.lineWidth=1;g.beginPath();g.moveTo(40,10);g.lineTo(40,h-24);g.lineTo(w-10,h-24);g.stroke();
+g.fillStyle=muted;g.font='12px "Trebuchet MS",sans-serif';g.fillText(mx,8,18);g.fillText('0',20,h-28);
+g.fillText('People waiting over the last ~20 simulated minutes',50,h-6);
+if(S.hist.length<2)return;g.strokeStyle=acc;g.lineWidth=2.5;g.beginPath();
+S.hist.forEach(function(v,i){var x=40+(w-50)*i/199,y=h-24-(h-40)*v/mx;i?g.lineTo(x,y):g.moveTo(x,y)});g.stroke();
+}
+function ui(){
+$('sQ').textContent=S.q.length;
+$('sW').textContent=S.served?fmt(S.waitSum/Math.max(1,S.served+S.srv.filter(function(s){return s.c}).length)):'0:00';
+$('sS').textContent=S.served;$('sL').textContent=S.left;
+$('sU').textContent=S.bt?Math.round(100*S.busy/S.bt)+'%':'0%';
+}
+function loop(now){
+var real=Math.min(0.1,(now-last)/1000);last=now;
+if(!paused){var sim=real*10*(+$('nS').value),k=Math.ceil(sim);for(var i=0;i<k;i++)step(sim/k)}
+ui();drawShop();drawChart();requestAnimationFrame(loop);
+}
+$('nB').oninput=function(){$('vB').textContent=this.value;setServers()};
+$('nA').oninput=function(){$('vA').textContent=this.value};
+$('nS').oninput=function(){$('vS').textContent=this.value+'×'};
+$('rush').onclick=function(){rushLeft=120;this.disabled=true;$('log').textContent='Rush on: arrivals doubled for 2 simulated minutes.'};
+$('pause').onclick=function(){paused=!paused;this.textContent=paused?'Resume':'Pause'};
+$('reset').onclick=function(){init();rushLeft=0;$('rush').disabled=false;$('log').textContent='Reset. Staff the counter and go.'};
+init();requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
